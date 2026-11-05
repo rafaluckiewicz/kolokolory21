@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#17151f">
+<title>Koło Fortuny – losowanie kolorów</title>
+<style>
+:root{--bg:#17151f;--panel:#242131;--text:#fff;--muted:#c9c5d6;--accent:#ffd166}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#38304b,#17151f 55%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:24px 14px}
+main{max-width:760px;margin:auto}
+header{text-align:center;margin:8px 0 22px}
+h1{font-size:clamp(28px,6vw,42px);margin:0 0 8px}
+header p{color:var(--muted);margin:0}
+.panel{background:rgba(36,33,49,.94);border:1px solid #484158;border-radius:22px;padding:20px;margin:16px 0;box-shadow:0 14px 40px #0004}
+.wheel-wrap{width:min(78vw,340px);margin:10px auto 18px;position:relative}
+.pointer{position:absolute;z-index:2;left:50%;top:-10px;transform:translateX(-50%);width:0;height:0;border-left:17px solid transparent;border-right:17px solid transparent;border-top:0;border-bottom:30px solid var(--accent);filter:drop-shadow(0 3px 2px #0008)}
+.wheel{width:100%;aspect-ratio:1;border-radius:50%;border:9px solid #f7e7b4;box-shadow:0 8px 25px #0008,inset 0 0 0 3px #ffffff55;background:conic-gradient(#242424 0deg 72deg,#e53935 72deg 144deg,#f28c28 144deg 216deg,#299d50 216deg 288deg,#fff 288deg 360deg);transition:transform 4s cubic-bezier(.12,.72,.12,1);position:relative}
+.wheel:after{content:"";position:absolute;inset:40%;border-radius:50%;background:#f7e7b4;border:5px solid #fff;box-shadow:0 2px 8px #0005}
+.labels{position:absolute;inset:0;pointer-events:none}
+.label{position:absolute;left:50%;top:50%;font-weight:800;font-size:clamp(12px,2.8vw,16px);text-shadow:0 1px 3px #000;transform-origin:0 0}
+.formrow{display:flex;gap:10px;flex-wrap:wrap}
+input{flex:1;min-width:180px;border:1px solid #625b74;border-radius:12px;background:#17151f;color:#fff;padding:14px;font-size:16px}
+button{border:0;border-radius:12px;background:var(--accent);color:#211b2b;font-weight:800;padding:14px 20px;font-size:16px;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+.note{color:var(--muted);font-size:14px;line-height:1.5}
+.status{min-height:24px;text-align:center;color:var(--accent);font-weight:650;margin-top:12px}
+.result{text-align:center;font-size:22px;font-weight:800;margin:14px 0}
+.result-swatch{display:inline-block;width:22px;height:22px;border-radius:50%;vertical-align:-4px;border:2px solid #ffffff88;margin-right:8px}
+table{width:100%;border-collapse:collapse;margin-top:10px}
+th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #484158}
+th{color:var(--muted);font-size:13px}
+td:last-child{font-weight:750}
+.small{font-size:13px;color:var(--muted)}
+footer{text-align:center;color:var(--muted);font-size:12px;padding:8px}
+@media(max-width:480px){.panel{padding:16px}.formrow{flex-direction:column}button{width:100%}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>🎡 Koło Fortuny</h1><p>Wylosuj swój kolor — każdy kolor tylko raz!</p></header>
+<section class="panel">
+  <div class="wheel-wrap">
+    <div class="pointer"></div>
+    <div id="wheel" class="wheel"></div>
+  </div>
+  <label for="name"><strong>Wpisz swoje imię</strong></label>
+  <div class="formrow" style="margin-top:9px">
+    <input id="name" maxlength="30" autocomplete="given-name" placeholder="Np. Kasia">
+    <button id="draw">ZAKRĘĆ KOŁEM</button>
+  </div>
+  <div id="status" class="status" role="status"></div>
+  <div id="myResult" class="result" aria-live="polite"></div>
+  <p class="note">Wyniki są wspólne dla wszystkich osób korzystających z tego samego linku. Po przydzieleniu kolor nie może zostać wylosowany ponownie.</p>
+</section>
+<section class="panel">
+  <h2 style="margin:0">🏆 Kto jaki kolor wylosował?</h2>
+  <div id="count" class="small">Połącz z bazą, aby zobaczyć wyniki.</div>
+  <table><thead><tr><th>Osoba</th><th>Kolor</th></tr></thead><tbody id="results"><tr><td colspan="2">Ładowanie…</td></tr></tbody></table>
+</section>
+<footer>Losowanie dla maksymalnie 5 osób · wspólna tablica wyników</footer>
+</main>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getDatabase, ref, onValue, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+// Wklej tutaj dane swojej aplikacji Firebase (instrukcja w pliku README).
+const firebaseConfig = {
+  apiKey: "WKLEJ_API_KEY",
+  authDomain: "WKLEJ_PROJECT_ID.firebaseapp.com",
+  databaseURL: "WKLEJ_DATABASE_URL",
+  projectId: "WKLEJ_PROJECT_ID",
+  appId: "WKLEJ_APP_ID"
+};
+
+const COLORS = [
+  {name:"Czarny", hex:"#242424"},
+  {name:"Czerwony", hex:"#e53935"},
+  {name:"Pomarańczowy", hex:"#f28c28"},
+  {name:"Zielony", hex:"#299d50"},
+  {name:"Biały", hex:"#ffffff"}
+];
+const $ = id => document.getElementById(id);
+const drawButton = $("draw");
+let database, roomRef;
+const roomId = (location.hash.slice(1) || "zAsmeqDtvNZ2r2qV1o6lSiwF").replace(/[^a-zA-Z0-9_-]/g,"");
+
+function setStatus(message){ $("status").textContent = message; }
+function render(data){
+  const entries = data && data.people ? Object.values(data.people) : [];
+  $("count").textContent = `${entries.length} z 5 kolorów rozdanych`;
+  const tbody = $("results");
+  if(!entries.length){ tbody.innerHTML = '<tr><td colspan="2">Jeszcze nikt nie losował.</td></tr>'; return; }
+  tbody.innerHTML = "";
+  entries.sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)).forEach(person=>{
+    const tr=document.createElement("tr");
+    const name=document.createElement("td"); name.textContent=person.name;
+    const color=document.createElement("td");
+    const swatch=document.createElement("span"); swatch.className="result-swatch"; swatch.style.background=person.hex;
+    color.append(swatch,document.createTextNode(person.color));
+    tr.append(name,color); tbody.append(tr);
+  });
+}
+function spinTo(color){
+  const index = COLORS.findIndex(c=>c.name===color);
+  const center = index*72+36;
+  const extra = (360-center+360)%360;
+  const current = Number(getComputedStyle($("wheel")).transform.match(/matrix\(([^,]+)/)?.[1] || 1);
+  const currentAngle = Math.atan2(Number(getComputedStyle($("wheel")).transform.split(",")[1]||0),current)*180/Math.PI;
+  const normalized = (currentAngle+360)%360;
+  const target = normalized + 360*5 + extra;
+  $("wheel").style.transform = `rotate(${target}deg)`;
+}
+async function start(){
+  if(Object.values(firebaseConfig).some(v=>String(v).startsWith("WKLEJ"))){
+    setStatus("Najpierw skonfiguruj bezpłatną bazę Firebase — instrukcja jest w README.");
+    drawButton.disabled=true; $("results").innerHTML='<tr><td colspan="2">Oczekuje na konfigurację Firebase.</td></tr>'; return;
+  }
+  try{
+    const app=initializeApp(firebaseConfig);
+    const auth=getAuth(app);
+    await signInAnonymously(auth);
+    database=getDatabase(app);
+    roomRef=ref(database,`rooms/${roomId}`);
+    onValue(roomRef,snapshot=>render(snapshot.val()||{}),error=>setStatus("Nie udało się odczytać wyników: "+error.message));
+    drawButton.disabled=false;
+    setStatus("Gotowe! Wpisz imię i zakręć kołem.");
+  }catch(error){setStatus("Błąd połączenia: "+error.message);drawButton.disabled=true;}
+}
+drawButton.disabled=true;
+drawButton.addEventListener("click",async()=>{
+  const name=$("name").value.trim();
+  if(!name){setStatus("Najpierw wpisz swoje imię.");$("name").focus();return;}
+  if(!roomRef)return;
+  drawButton.disabled=true;setStatus("Koło się kręci…");$("myResult").textContent="";
+  let assigned=null, problem=null;
+  try{
+    const result=await runTransaction(roomRef,current=>{
+      current=current||{};
+      current.people=current.people||{};
+      const people=Object.values(current.people);
+      if(people.length>=5){problem="Wszystkie kolory zostały już rozdane.";return;}
+      if(people.some(p=>p.name.toLocaleLowerCase("pl")===name.toLocaleLowerCase("pl"))){problem="To imię jest już na liście — wpisz inne.";return;}
+      const used=people.map(p=>p.color);
+      const available=COLORS.filter(c=>!used.includes(c.name));
+      if(!available.length){problem="Brak wolnych kolorów.";return;}
+      const chosen=available[Math.floor(Math.random()*available.length)];
+      const key=crypto.randomUUID();
+      current.people[key]={name,color:chosen.name,hex:chosen.hex,createdAt:Date.now()};
+      assigned=chosen;
+      return current;
+    },{applyLocally:false});
+    if(!result.committed||!assigned){setStatus(problem||"Nie udało się wykonać losowania.");drawButton.disabled=false;return;}
+    spinTo(assigned.name);
+    setTimeout(()=>{
+      $("myResult").innerHTML="";
+      const swatch=document.createElement("span");swatch.className="result-swatch";swatch.style.background=assigned.hex;
+      $("myResult").append("Twój kolor: ",swatch,document.createTextNode(assigned.name+"!"));
+      setStatus("Wynik zapisany — wszyscy go widzą.");
+      drawButton.disabled=true;
+    },1800);
+  }catch(error){setStatus("Błąd losowania: "+error.message);drawButton.disabled=false;}
+});
+start();
+</script>
+</body>
+</html>
